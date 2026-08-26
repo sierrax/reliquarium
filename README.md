@@ -30,12 +30,15 @@ replace old single-threaded tools like PicCheck without the bloat of the
 - **CSV catalog matching** — matches scanned files against your catalog by
   `(filesize, crc32)`, which is far more reliable than matching by filename.
 - **First-run setup** for default folders (CSV / Ingest / Base Collections
-  Directory) — see **Default Directories** below.
+  Directory), plus a fuller **Preferences** window for behavior defaults
+  (Copy vs. Move, deleting empty directories after a move, recursive
+  scanning, and reporting settings) — see **Preferences** below.
 - **Remembers your last CSV/folder picks** — the browse dialogs reopen
   wherever you last picked from.
 - **Sortable/filterable results table** — filter by Matched / Unmatched /
   Error, or search by filename.
-- **Copy or Move** with conflict handling: Skip, Overwrite, or Rename-and-keep-both.
+- **Copy or Move** with conflict handling: Skip, Overwrite, or Rename-and-keep-both,
+  and an opt-in setting to clean up directories a Move leaves empty behind it.
 - **Selective processing** — checkbox per matched row, "Select All Matched"
   for bulk action.
 - **Activity log** with CSV export of full results (status, path, target, outcome).
@@ -94,6 +97,33 @@ Some Show S01E01.mkv,419430400,DEADBEEF,\TV\Some Show\Season 1
    python main.py
    ```
 
+## Cross-Platform Status
+
+Windows is the primary, most-tested target — everything above assumes it.
+That said, nothing in the code is deliberately Windows-only, and the one
+confirmed platform-specific bug has been fixed: catalog CSVs' `directory`
+column is typically written with Windows-style backslash separators (e.g.
+`Scenes\001`), and only Windows' own path handling understands backslash
+as a separator at all. Elsewhere, that string would either get mangled
+into one garbled folder name, or — worse, on Linux/macOS specifically,
+where *any* leading slash means "absolute path" (there's no drive-letter
+concept to require) — get misread as a deliberate absolute path override,
+silently discarding the Base Collections Directory entirely. Path
+resolution now normalizes separators and judges "is this really meant to
+be absolute" using Windows conventions specifically, regardless of which
+OS is actually running the app, so the same CSV resolves identically on
+either platform.
+
+What that means practically: the app *should* run and organize collections
+correctly on Linux and macOS, using the same `pip install -r
+requirements.txt` / `python main.py` steps as Windows (a couple of the
+`pip install` details, like the theming package, may differ by platform).
+But actual real-world use on Linux/macOS is much newer and far less
+battle-tested than the Windows path, which has been through months of
+testing against a real 198-DVD collection. If you're trying it there,
+treat it with the same "smoke test on a small folder first" caution as
+anywhere else in this README, and more so.
+
 ## Usage
 
 1. **Source** — choose one of four modes:
@@ -108,8 +138,8 @@ Some Show S01E01.mkv,419430400,DEADBEEF,\TV\Some Show\Season 1
      to. Also has its own **Manage Collections...** button, since there's
      no dropdown here to hang it off of. See **Collections** below for
      details.
-2. **Scan Directory** — browse to the folder you want to scan (toggle
-   "Scan subdirectories" for recursive scanning).
+2. **Scan Directory** — browse to the folder you want to scan (whether this
+   is recursive is set in **Preferences** — see below).
 3. **Base Collections Directory** *(optional)* — see **Output Path
    Structure** below for exactly how this is used.
 4. Set **Hashing threads** if you want to tune parallelism (defaults to your
@@ -126,28 +156,69 @@ Some Show S01E01.mkv,419430400,DEADBEEF,\TV\Some Show\Season 1
    to save a CSV record of what happened, or generate a completeness
    report / "-needed" CSVs — see **Reporting** below.
 
-## Default Directories
+## Preferences
 
-The first time you run the app, a setup dialog asks for three optional
-defaults: **CSV Directory** (where the CSV browse dialogs start out before
-you've picked anything yet), **Ingest Directory** (pre-fills Scan
-Directory), and **Collection Base Directory** (pre-fills Base Collections
-Directory). Skip any/all of it if you'd rather set things up as you go.
+The first time you run the app, a lightweight setup dialog asks for three
+optional default directories — **CSV Directory** (where the CSV browse
+dialogs start out before you've picked anything yet), **Ingest Directory**
+(pre-fills Scan Directory), and **Collection Base Directory** (pre-fills
+Base Collections Directory). Skip any/all of it if you'd rather set things
+up as you go. That's deliberately *all* the first-run wizard asks — a
+brand-new user needs directories to do anything useful at all, but has no
+real basis yet to judge the behavior preferences below; those start at
+sensible defaults and are there to discover once you've actually used the
+tool a bit.
 
-- These are *defaults*, not locks — the Scan Directory and Base Collections
-  Directory fields can still be changed freely for any individual run
-  without affecting what they default to next time.
-- Revisit them anytime from **File → Change Default Directories...** (the
-  File menu also has a plain **Exit**; there's a **Collections → Manage
-  Collections...** menu too, always available regardless of which source
-  mode is selected; a **View → Theme** submenu
-  to switch between Light and Dark — defaults to Dark, persists across
-  restarts, and applies immediately without needing to relaunch; and a
-  **Help → About Reliquarium** with the current version number).
-- Once you've actually browsed to a CSV or folder-of-CSVs at least once,
-  that most-recently-used location takes over as the browse dialog's
-  starting point (this was already true before defaults existed) — the CSV
-  Directory default is only the starting point before that first pick.
+**File → Preferences...** opens the fuller version any time after that,
+with everything grouped into a few plain sections in one window (not a
+multi-page or tabbed settings screen — the app's scope doesn't call for
+that):
+
+- **Default Directories** — the same three fields from first-run setup.
+  These are *defaults*, not locks — the Scan Directory and Base
+  Collections Directory fields on the main window can still be changed
+  freely for any individual run without affecting what they default to
+  next time. Once you've actually browsed to a CSV or folder-of-CSVs at
+  least once, that most-recently-used location takes over as the browse
+  dialog's starting point (this was already true before defaults
+  existed) — the CSV Directory default is only the starting point before
+  that first pick.
+- **Default Behavior**:
+  - **Default action** (Copy or Move) — sets which one is pre-selected on
+    the main window each time the app starts. Unlike everything else in
+    Preferences, Copy/Move stays a live control on the main window itself,
+    not something tucked away here — it's a genuine per-run judgment call
+    as often as it's a fixed preference, so it needs to stay one click
+    away during actual use, not two.
+  - **Delete empty directories left behind after Move** (off by default)
+    — see below.
+  - **Scan subdirectories by default** — whether a scan recurses into
+    subfolders. This one *did* used to live on the main window as its own
+    checkbox; it moved here because for most people it's genuinely a
+    "set once and never touch again" choice, freeing up main-window space
+    for the controls that actually vary run to run.
+- **Reporting** — "Also verify Base Collections Directory for reports",
+  "Automatically open report after processing", and "Keep last N
+  auto-generated reports per collection" — see **Reporting** below for
+  what each one does. These also used to be main-window checkboxes; same
+  reasoning as recursive scan.
+
+### Delete empty directories after Move
+
+When enabled, a **Move** batch also cleans up afterward: for every file
+that got moved, its original parent folder is removed if that move left
+it empty — then *its* parent is checked too, and so on upward, so a whole
+chain of now-hollowed-out folders collapses in one pass rather than just
+the innermost one. Two folders that shared a parent both get a chance to
+empty that parent out, even though they're cleaned up independently.
+Never removes anything that still has content in it, and never removes
+the Scan Directory itself, no matter how empty it ends up. Off by
+default, since it's still a destructive filesystem operation even though
+it's scoped tightly to just what the batch actually touched — turning it
+on is a deliberate opt-in, not an assumption. The confirmation dialog
+before a Move mentions it explicitly whenever it's enabled, so it's never
+a surprise after the fact. Has no effect when the action is Copy, since
+Copy never empties anything out of the source to begin with.
 
 ## Collections
 
@@ -295,8 +366,8 @@ therefore a report) actually happens:
    — both also force a full fresh verification (every CSV in the current
    context) before acting on the result, same reasoning as #2.
 
-If no default CSV directory has been set (see **Default Directories**
-above), automatic saves (1 and 2) are skipped with a log note rather than
+If no default CSV directory has been set (see **Preferences** above),
+automatic saves (1 and 2) are skipped with a log note rather than
 failing; the manual button still works and lets you choose a location.
 
 **In "All Collections" mode, this produces one report per collection
@@ -341,11 +412,12 @@ same hash cache as everything else, so a genuinely first-ever pass over a
 large existing collection takes a while, but every pass after that — this
 session or a future one — is fast (only new or changed files get
 re-hashed, and post-move passes only touch the CSVs that could have
-changed at all). A checkbox ("Also verify Base Collections Directory for
-reports", on by default) lets you skip verification entirely if you'd
-rather only ever see completeness for what's in the current ingest batch.
+changed at all). **Preferences → Reporting** has an "Also verify Base
+Collections Directory for reports" setting (on by default) that lets you
+skip verification entirely if you'd rather only ever see completeness for
+what's in the current ingest batch.
 
-**Two more report-related controls sit right below that checkbox:**
+**Two more report-related settings live in that same Preferences section:**
 
 - **"Keep last N auto-generated reports per collection"** (default 10, 0 =
   unlimited) — auto-generated, timestamped reports for a collection older
@@ -468,11 +540,11 @@ core/resources.py               locates bundled read-only files (icon) whether r
 core/portable.py                 locates the app's own persistent data/ directory + migrates legacy %LOCALAPPDATA% data
 core/version.py                 single source of truth for the version number
 assets/icon.ico, icon.png       app icon
-core/file_ops.py               move/copy with conflict resolution
+core/file_ops.py               move/copy with conflict resolution + empty-directory cleanup after Move
 ui/main_window.py              main window / application logic
 ui/collections_dialog.py       Manage Collections dialog
 ui/collection_status_window.py per-collection completeness dashboard (separate window)
-ui/setup_dialog.py             first-run / change-defaults dialog
+ui/setup_dialog.py             first-run wizard / Preferences dialog (directories + behavior + reporting)
 ui/results_model.py            Qt table model + status/search filter proxy
 ui/processing_thread.py        background thread for move/copy jobs
 ```

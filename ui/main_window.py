@@ -4,7 +4,7 @@ from __future__ import annotations
 import csv
 import os
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from PySide6.QtCore import Qt, QThreadPool, QSettings
 from PySide6.QtGui import QIcon, QActionGroup
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from core.csv_loader import load_multiple_csvs, load_all_collections, build_index, CsvLoadError
 from core.scanner import EnumerateThread, HashWorker, WorkerSignals, ScanResult
-from core.file_ops import ConflictPolicy, Operation
+from core.file_ops import ConflictPolicy, Operation, remove_empty_directories
 from core.hash_cache import default_cache_path, load_cache, save_cache, clear_cache_file
 from core.verification_cache import default_verification_cache_path, load_verification_cache, save_verification_cache
 from core.collections_store import CollectionsStore, default_collections_path
@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
         self._current_verify_key = ("", "")     # (source_collection, csv_name) the in-flight walk's results belong to
         self._process_success_count = 0
         self._process_touched_keys: set = set()  # (source_collection, source_csv) pairs actually moved/copied this run
+        self._process_moved_source_dirs: set = set()  # parent dirs of files actually MOVED this run, for empty-dir cleanup
         self._hash_total = 0
         self._hash_completed = 0
         self._collection_hash_total = 0
@@ -178,7 +179,7 @@ class MainWindow(QMainWindow):
     def _build_menu_bar(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
-        change_defaults_action = file_menu.addAction("Change Default Directories...")
+        change_defaults_action = file_menu.addAction("Preferences...")
         change_defaults_action.triggered.connect(self._open_change_defaults)
         file_menu.addSeparator()
         exit_action = file_menu.addAction("Exit")
@@ -384,11 +385,6 @@ class MainWindow(QMainWindow):
         form.addRow("Base Collections Directory:", output_row)
 
         options_row = QHBoxLayout()
-        self.recursive_check = QCheckBox("Scan subdirectories")
-        self.recursive_check.setChecked(True)
-        options_row.addWidget(self.recursive_check)
-
-        options_row.addSpacing(20)
         options_row.addWidget(QLabel("Hashing threads:"))
         self.thread_spin = QSpinBox()
         self.thread_spin.setRange(1, 64)
@@ -467,45 +463,6 @@ class MainWindow(QMainWindow):
         report_row.addWidget(self.generate_needed_button)
         layout.addLayout(report_row)
 
-        verify_row = QHBoxLayout()
-        self.verify_collection_dir_check = QCheckBox(
-            "Also verify Base Collections Directory for reports (catches files already sorted in past runs)"
-        )
-        self.verify_collection_dir_check.setChecked(True)
-        self.verify_collection_dir_check.setToolTip(
-            "Without this, a completeness report only reflects files found in THIS scan's ingest "
-            "directory -- a disc that's already 100% sorted from a previous run would wrongly show "
-            "as entirely missing if none of its files happen to be in today's ingest folder. "
-            "Uses the same hash cache, so repeat verification passes are fast after the first one."
-        )
-        verify_row.addWidget(self.verify_collection_dir_check)
-        verify_row.addStretch(1)
-        layout.addLayout(verify_row)
-
-        report_settings_row = QHBoxLayout()
-        self.auto_open_report_check = QCheckBox("Automatically open report after processing")
-        self.auto_open_report_check.setToolTip(
-            "Opens the report(s) generated after Process Selected with your default text editor, "
-            "same as double-clicking the file. If a move touched more than one collection, each "
-            "one's report opens separately."
-        )
-        report_settings_row.addWidget(self.auto_open_report_check)
-        report_settings_row.addSpacing(20)
-        report_settings_row.addWidget(QLabel("Keep last"))
-        self.report_retention_spin = QSpinBox()
-        self.report_retention_spin.setRange(0, 9999)
-        self.report_retention_spin.setSpecialValueText("unlimited")
-        self.report_retention_spin.setToolTip(
-            "Older auto-generated reports for a collection are deleted once more than this many "
-            "exist for it, keeping the most recent. Set to 0 for unlimited (never auto-delete). "
-            "Only ever affects auto-generated, timestamped reports -- never anything you've "
-            "manually saved via Generate Report...'s save dialog."
-        )
-        report_settings_row.addWidget(self.report_retention_spin)
-        report_settings_row.addWidget(QLabel("auto-generated reports per collection"))
-        report_settings_row.addStretch(1)
-        layout.addLayout(report_settings_row)
-
         return group
 
     def _build_action_group(self) -> QGroupBox:
@@ -516,7 +473,10 @@ class MainWindow(QMainWindow):
 
         self.copy_radio = QRadioButton("Copy")
         self.move_radio = QRadioButton("Move")
-        self.copy_radio.setChecked(True)
+        if self.settings.value("default_operation", "copy", type=str) == "move":
+            self.move_radio.setChecked(True)
+        else:
+            self.copy_radio.setChecked(True)
         op_group = QButtonGroup(self)
         op_group.addButton(self.copy_radio)
         op_group.addButton(self.move_radio)
@@ -575,16 +535,6 @@ class MainWindow(QMainWindow):
     def _wire_signals(self):
         self.model.checkedCountChanged.connect(
             lambda n: self.selected_count_label.setText(f"{n} selected")
-        )
-
-        self.auto_open_report_check.setChecked(self.settings.value("auto_open_report", False, type=bool))
-        self.auto_open_report_check.toggled.connect(
-            lambda checked: self.settings.setValue("auto_open_report", checked)
-        )
-
-        self.report_retention_spin.setValue(self.settings.value("report_retention_count", 10, type=int))
-        self.report_retention_spin.valueChanged.connect(
-            lambda value: self.settings.setValue("report_retention_count", value)
         )
 
     # ------------------------------------------------------------------
@@ -660,7 +610,7 @@ class MainWindow(QMainWindow):
             verification_cache=self._verification_cache,
             verification_cache_path=self._verification_cache_path,
             reports_dir=self._reports_dir(),
-            report_retention_count=self.report_retention_spin.value(),
+            report_retention_count=self.settings.value("report_retention_count", 10, type=int),
             parent=self,
         )
         self._status_windows.append(window)
@@ -689,6 +639,12 @@ class MainWindow(QMainWindow):
             "csv_dir": self.settings.value("default_csv_dir", "", type=str),
             "scan_dir": self.settings.value("default_scan_dir", "", type=str),
             "output_dir": self.settings.value("default_output_dir", "", type=str),
+            "default_operation": self.settings.value("default_operation", "copy", type=str),
+            "default_delete_empty_dirs": self.settings.value("default_delete_empty_dirs", False, type=bool),
+            "default_recursive": self.settings.value("default_recursive", True, type=bool),
+            "verify_collection_dir": self.settings.value("verify_collection_dir", True, type=bool),
+            "auto_open_report": self.settings.value("auto_open_report", False, type=bool),
+            "report_retention_count": self.settings.value("report_retention_count", 10, type=int),
         }
 
     def _reports_dir(self):
@@ -708,6 +664,12 @@ class MainWindow(QMainWindow):
         self.settings.setValue("default_csv_dir", values.get("csv_dir", ""))
         self.settings.setValue("default_scan_dir", values.get("scan_dir", ""))
         self.settings.setValue("default_output_dir", values.get("output_dir", ""))
+        self.settings.setValue("default_operation", values.get("default_operation", "copy"))
+        self.settings.setValue("default_delete_empty_dirs", values.get("default_delete_empty_dirs", False))
+        self.settings.setValue("default_recursive", values.get("default_recursive", True))
+        self.settings.setValue("verify_collection_dir", values.get("verify_collection_dir", True))
+        self.settings.setValue("auto_open_report", values.get("auto_open_report", False))
+        self.settings.setValue("report_retention_count", values.get("report_retention_count", 10))
 
     def _load_persisted_defaults(self):
         defaults = self._current_defaults()
@@ -715,6 +677,14 @@ class MainWindow(QMainWindow):
             self.scan_dir_edit.setText(defaults["scan_dir"])
         if defaults["output_dir"]:
             self.output_dir_edit.setText(defaults["output_dir"])
+        # Copy/Move stays a live, per-run main-page control (unlike the
+        # other preferences, which have no main-page presence at all) --
+        # this just reflects whatever the default currently is, including
+        # right after it's been changed via Preferences.
+        if defaults["default_operation"] == "move":
+            self.move_radio.setChecked(True)
+        else:
+            self.copy_radio.setChecked(True)
 
     def _maybe_run_first_time_setup(self):
         if self.settings.value("setup_complete", False, type=bool):
@@ -792,7 +762,8 @@ class MainWindow(QMainWindow):
         self.scan_progress.setValue(0)
         self.scan_status_label.setText("Enumerating files...")
 
-        self._enum_thread = EnumerateThread(scan_dir, self.recursive_check.isChecked(), self)
+        recursive = self.settings.value("default_recursive", True, type=bool)
+        self._enum_thread = EnumerateThread(scan_dir, recursive, self)
         self._enum_thread.countUpdate.connect(
             lambda n: self.scan_status_label.setText(f"Enumerating files... {n} found")
         )
@@ -987,13 +958,35 @@ class MainWindow(QMainWindow):
         like "\\Movies\\Action" gets treated by Path's / operator as an
         anchor that resets to the drive root, silently discarding everything
         to its left (this was the bug behind files landing at the drive root).
+
+        CSVs are typically written with Windows-style backslash separators
+        (e.g. "Scenes\\001"), but only WindowsPath actually understands
+        backslash as a path separator -- on POSIX (Linux/macOS), pathlib
+        treats it as a literal character in the filename, turning
+        "Scenes\\001" into one garbled folder instead of two nested ones.
+        Forward slash is recognized as a separator by pathlib on every
+        platform (Windows included), so this normalizes to forward slashes
+        before building anything, which is what actually makes this work
+        correctly regardless of which OS the app is running on.
+
+        Absoluteness is judged using PureWindowsPath specifically (drive
+        letter or UNC), regardless of which OS is actually running the
+        app -- catalog CSVs are written with Windows conventions in mind,
+        so this keeps the same CSV resolving identically on every
+        platform. Using the platform-native check here would break on
+        POSIX specifically: POSIX treats ANY leading slash as absolute
+        (no drive-letter concept), so a merely "rooted but driveless"
+        value like "/Movies/Action" would be wrongly treated as a
+        deliberate absolute override and silently discard the base
+        directory -- the exact same class of bug this whole check exists
+        to prevent, just resurfacing on a different platform.
         """
         if not self._output_base_dir:
             return csv_directory
-        candidate = csv_directory.strip()
-        if Path(candidate).is_absolute():
+        candidate = csv_directory.strip().replace("\\", "/")
+        if PureWindowsPath(candidate).is_absolute():
             return candidate
-        candidate = candidate.lstrip("\\/")
+        candidate = candidate.lstrip("/")
         target = Path(self._output_base_dir)
         if source_collection:
             target = target / source_collection
@@ -1050,11 +1043,17 @@ class MainWindow(QMainWindow):
 
         operation = Operation.MOVE if self.move_radio.isChecked() else Operation.COPY
         conflict_policy = ConflictPolicy(self.conflict_combo.currentText())
+        delete_empty_dirs = operation is Operation.MOVE and self.settings.value(
+            "default_delete_empty_dirs", False, type=bool
+        )
 
         if operation is Operation.MOVE:
+            confirm_text = f"This will MOVE {len(jobs)} file(s) out of the scan directory."
+            if delete_empty_dirs:
+                confirm_text += " Any directories left empty afterward will also be removed."
+            confirm_text += " Continue?"
             confirm = QMessageBox.question(
-                self, "Confirm Move",
-                f"This will MOVE {len(jobs)} file(s) out of the scan directory. Continue?",
+                self, "Confirm Move", confirm_text,
                 QMessageBox.Yes | QMessageBox.No,
             )
             if confirm != QMessageBox.Yes:
@@ -1066,6 +1065,7 @@ class MainWindow(QMainWindow):
         self.process_progress.setValue(0)
         self._process_success_count = 0
         self._process_touched_keys = set()
+        self._process_moved_source_dirs = set()
 
         self._processing_thread = ProcessingThread(jobs, operation, conflict_policy, self)
         self._processing_thread.progress.connect(
@@ -1087,6 +1087,8 @@ class MainWindow(QMainWindow):
             row = self.model.row_at(row_index)
             if row.source_csv:
                 self._process_touched_keys.add((row.source_collection, row.source_csv))
+        if result.action == "moved":
+            self._process_moved_source_dirs.add(str(Path(result.source).parent))
         dest_str = f" -> {result.destination}" if result.destination else ""
         self._log(f"[{result.action.upper()}] {result.source}{dest_str}"
                    + (f" — {result.detail}" if result.detail else ""))
@@ -1095,6 +1097,17 @@ class MainWindow(QMainWindow):
         self.process_button.setEnabled(True)
         self.cancel_process_button.setEnabled(False)
         self._log("Processing complete.")
+
+        if self._process_moved_source_dirs and self.settings.value("default_delete_empty_dirs", False, type=bool):
+            scan_dir = self.scan_dir_edit.text().strip()
+            if scan_dir:
+                removed = remove_empty_directories(self._process_moved_source_dirs, scan_dir)
+                if removed:
+                    plural = "y" if len(removed) == 1 else "ies"
+                    self._log(f"Removed {len(removed)} empty director{plural} left behind by the move:")
+                    for r in removed:
+                        self._log(f"  {r}")
+
         if self._process_success_count > 0:
             # At least one file actually moved/copied -- but only into the
             # specific (collection, CSV) folder(s) those particular files
@@ -1207,7 +1220,7 @@ class MainWindow(QMainWindow):
         # touches, since a scan can now span more than one collection.
         self._collection_scanned_files_by_key = self._load_all_cached_verification()
 
-        if not self._output_base_dir or not self.verify_collection_dir_check.isChecked():
+        if not self._output_base_dir or not self.settings.value("verify_collection_dir", True, type=bool):
             self._run_pending_verify_callback()
             return
 
@@ -1508,7 +1521,7 @@ class MainWindow(QMainWindow):
             return
         reports_dir = self._reports_dir()
         if not reports_dir:
-            self._log("Skipping automatic report (no default CSV directory set -- see File > Change Default Directories).")
+            self._log("Skipping automatic report (no default CSV directory set -- see File > Preferences).")
             return
         try:
             reports_dir.mkdir(parents=True, exist_ok=True)
@@ -1518,8 +1531,8 @@ class MainWindow(QMainWindow):
 
         summaries = self._compute_report_summaries_by_collection()
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        retention = self.report_retention_spin.value()
-        auto_open = self.auto_open_report_check.isChecked()
+        retention = self.settings.value("report_retention_count", 10, type=int)
+        auto_open = self.settings.value("auto_open_report", False, type=bool)
         for collection_name, summary in summaries.items():
             title = f"Collection Report — {collection_name or 'Ad Hoc Scan'}"
             text = format_report_text(summary, title=title)
