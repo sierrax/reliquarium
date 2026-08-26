@@ -1,9 +1,16 @@
 # Reliquarium
 
-A modern, multi-threaded desktop tool for matching files against a CSV catalog
-by CRC32 checksum, then copying or moving matched files into place. Built to
-replace old single-threaded tools like PicCheck without the bloat of the
-"do everything" alternatives.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Build](https://github.com/sierrax/reliquarium/actions/workflows/build.yml/badge.svg)](https://github.com/sierrax/reliquarium/actions/workflows/build.yml)
+[![Platform: Windows | Linux](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational)](#cross-platform-status)
+
+**Got a big disc-based media collection (DVDs, CDs, whatever) with a CSV
+catalog of what's supposed to be in it? Reliquarium tells you exactly
+what's correct, what's corrupted, and what's still missing — then sorts
+the good files into place for you.** Built to replace slow,
+single-threaded tools like PicCheck without the sprawl of do-everything
+alternatives like Hunter. Matches files by CRC32 checksum rather than
+filename, so renamed or relocated files are still recognized correctly.
 
 ## Features
 
@@ -506,7 +513,14 @@ reality — there's no separate tracked state that could drift out of sync.
 
 ## Building a standalone .exe (optional)
 
-If you'd rather not require Python on the machine you run this on:
+**The easiest option is to just grab a pre-built release** — pushing a
+`v*` tag triggers `.github/workflows/build.yml`, which builds both a
+Windows (onedir) package and a Linux AppImage (built against an Ubuntu
+24.04 base — see **Cross-Platform Status** above) and attaches them to a
+GitHub Release automatically.
+
+To build it yourself instead, if you'd rather not require Python on the
+machine you run this on:
 
 ```
 pip install pyinstaller
@@ -516,12 +530,35 @@ pyinstaller --noconsole --onefile --name Reliquarium --icon assets\icon.ico --ad
 `--icon` sets the `.exe` file's own icon (what you see in File Explorer);
 `--add-data` bundles the icon file itself so the app can also set it as the
 window/taskbar icon at runtime — both are needed, they do different things.
+(The CI build above uses `--onedir` instead of `--onefile` — faster startup,
+no temp-extraction step — but either works fine for local use.)
 
 The resulting `.exe`'s `data\` folder (hash cache, collections, etc.) is
 created next to wherever the `.exe` itself ends up living, not inside
 PyInstaller's temporary extraction folder — so the whole portable-storage
 behavior described in **Portable Storage** above works exactly the same
 for the built `.exe` as it does running from source.
+
+### Building the Linux AppImage yourself
+
+The CI workflow (`.github/workflows/build.yml`) is the reference
+implementation and the easiest way to see the exact steps — in short:
+`pyinstaller --onedir`, assemble an `AppDir` using
+`packaging/linux/reliquarium.desktop` and `assets/icon.png`, then run
+[linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) with the
+[Qt plugin](https://github.com/linuxdeploy/linuxdeploy-plugin-qt) to
+resolve dependencies and produce the final `.AppImage`. Building inside a
+pinned base (the workflow uses an `ubuntu:24.04` container via Docker, not
+a GitHub-hosted runner image — those don't go back nearly that far
+anymore) matters for compatibility: glibc is forward-compatible but not
+backward-compatible, so a binary built against a newer glibc than a
+user's system has will simply refuse to run there. 24.04 is a deliberate
+choice rather than reaching for the oldest possible baseline — this
+tool's actual audience skews toward people already on something newer
+than what PicCheck/Hunter get along with (Windows 11, say), so a couple-
+years-back Linux baseline is a reasonable bet on who's really running
+this, not an attempt at maximum-possible compatibility with very old
+systems.
 
 The resulting `.exe` will be in `dist/`.
 
@@ -547,6 +584,10 @@ ui/collection_status_window.py per-collection completeness dashboard (separate w
 ui/setup_dialog.py             first-run wizard / Preferences dialog (directories + behavior + reporting)
 ui/results_model.py            Qt table model + status/search filter proxy
 ui/processing_thread.py        background thread for move/copy jobs
+LICENSE                        MIT
+CHANGELOG.md                   what changed, release by release
+.github/workflows/build.yml    CI: builds the Windows package + Linux AppImage, attaches to Releases on a v* tag
+packaging/linux/reliquarium.desktop   desktop entry used when assembling the AppImage
 ```
 
 ## Non-Goals (Deliberately Out of Scope, Forever)
