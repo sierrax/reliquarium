@@ -102,6 +102,24 @@ jobs:
         run: |
           export PATH="$PWD/plugin-bin:$PATH"
           export QML_SOURCES_PATHS="$PWD"
+
+          # linuxdeploy-plugin-qt needs to know which Qt installation to
+          # bundle files from, and finds it by locating qmake. There's no
+          # system Qt in this minimal container, and installing one via
+          # apt would be the WRONG fix even if it worked: PySide6 wheels
+          # bundle their own private Qt build rather than relying on a
+          # system install, so pointing this at an unrelated system Qt
+          # risks bundling a different Qt version than the one PySide6
+          # actually runs against at runtime. Ask PySide6 itself where its
+          # own qmake lives instead, so the bundled Qt always matches.
+          QT_BIN_DIR=$(/opt/venv/bin/python3 -c "import os, PySide6; print(os.path.join(os.path.dirname(PySide6.__file__), 'Qt', 'bin'))")
+          export QMAKE="$QT_BIN_DIR/qmake"
+          if [ ! -f "$QMAKE" ]; then
+            echo "Expected qmake at $QMAKE but it's not there. Contents of $QT_BIN_DIR:"
+            ls -la "$QT_BIN_DIR" || echo "(that directory doesn't exist either)"
+            exit 1
+          fi
+
           ./linuxdeploy-squashfs-root/AppRun --appdir AppDir \
             --executable AppDir/usr/bin/Reliquarium \
             --desktop-file packaging/linux/reliquarium.desktop \
