@@ -546,20 +546,24 @@ The CI workflow (`.github/workflows/build.yml`) is the reference
 implementation and the easiest way to see the exact steps — in short:
 `pyinstaller --onedir`, assemble an `AppDir` using
 `packaging/linux/reliquarium.desktop` and `assets/icon.png`, then run
-[linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) with the
-[Qt plugin](https://github.com/linuxdeploy/linuxdeploy-plugin-qt) to
-resolve dependencies and produce the final `.AppImage`. Building inside a
-pinned base (the workflow uses an `ubuntu:24.04` container via Docker, not
-a GitHub-hosted runner image — those don't go back nearly that far
-anymore) matters for compatibility: glibc is forward-compatible but not
-backward-compatible, so a binary built against a newer glibc than a
-user's system has will simply refuse to run there. 24.04 is a deliberate
-choice rather than reaching for the oldest possible baseline — this
-tool's actual audience skews toward people already on something newer
-than what PicCheck/Hunter get along with (Windows 11, say), so a couple-
-years-back Linux baseline is a reasonable bet on who's really running
-this, not an attempt at maximum-possible compatibility with very old
-systems.
+[linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) (its Qt plugin
+is deliberately **not** used — PyInstaller's own PySide6 hooks already
+correctly bundle everything Qt-related, including the platform plugins
+needed to actually open a window on Linux; linuxdeploy's Qt plugin
+expects a conventional Qt SDK layout that a PyInstaller build doesn't
+have, and running it on top of an already-bundled build is redundant at
+best) to resolve any remaining non-Qt shared library dependencies and
+produce the final `.AppImage`. Building inside a pinned base (the
+workflow uses an `ubuntu:24.04` container via Docker, not a GitHub-hosted
+runner image — those don't go back nearly that far anymore) matters for
+compatibility: glibc is forward-compatible but not backward-compatible,
+so a binary built against a newer glibc than a user's system has will
+simply refuse to run there. 24.04 is a deliberate choice rather than
+reaching for the oldest possible baseline — this tool's actual audience
+skews toward people already on something newer than what PicCheck/Hunter
+get along with (Windows 11, say), so a couple-years-back Linux baseline
+is a reasonable bet on who's really running this, not an attempt at
+maximum-possible compatibility with very old systems.
 
 The resulting `.exe` will be in `dist/`.
 

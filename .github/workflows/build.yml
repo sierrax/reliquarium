@@ -53,43 +53,18 @@ jobs:
             --icon assets/icon.ico --add-data "assets/icon.ico:assets" \
             main.py
 
-      - name: Fetch linuxdeploy and the Qt plugin
+      - name: Fetch linuxdeploy
         run: |
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
-          # These tools are themselves distributed as AppImages, which
-          # normally need FUSE to mount and run -- often unavailable
+          chmod +x linuxdeploy-x86_64.AppImage
+          # linuxdeploy is itself distributed as an AppImage, which
+          # normally needs FUSE to mount and run -- often unavailable
           # inside a container without extra privileges. Extracting once
           # and running the extracted AppRun directly sidesteps that
           # entirely rather than fighting FUSE in CI.
           ./linuxdeploy-x86_64.AppImage --appimage-extract
           mv squashfs-root linuxdeploy-squashfs-root
-          ./linuxdeploy-plugin-qt-x86_64.AppImage --appimage-extract
-          mv squashfs-root linuxdeploy-plugin-qt-squashfs-root
-
-          # linuxdeploy discovers its Qt plugin by searching for an
-          # executable named "linuxdeploy-plugin-qt" (suffixes allowed) in
-          # its own directory and on PATH. If the ORIGINAL AppImage is
-          # still sitting here, it matches that pattern and gets found and
-          # preferred over the extracted version -- landing right back in
-          # the same FUSE problem one level down, since running it directly
-          # tries to self-mount it. Deleting the originals now that they're
-          # extracted prevents that.
-          rm -f linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
-
-          # A correctly-named wrapper that goes through the extracted
-          # AppRun, not the raw inner binary directly -- AppRun is what
-          # sets up LD_LIBRARY_PATH etc. for the plugin's own bundled
-          # libraries, so calling the inner binary straight from usr/bin
-          # would risk a *different* library-loading failure once the
-          # plugin actually got invoked.
-          mkdir -p plugin-bin
-          cat > plugin-bin/linuxdeploy-plugin-qt << EOF
-          #!/bin/sh
-          exec "$PWD/linuxdeploy-plugin-qt-squashfs-root/AppRun" "\$@"
-          EOF
-          chmod +x plugin-bin/linuxdeploy-plugin-qt
+          rm -f linuxdeploy-x86_64.AppImage
 
       - name: Assemble AppDir
         run: |
@@ -100,31 +75,27 @@ jobs:
 
       - name: Build the AppImage
         run: |
-          export PATH="$PWD/plugin-bin:$PATH"
           export QML_SOURCES_PATHS="$PWD"
 
-          # linuxdeploy-plugin-qt needs to know which Qt installation to
-          # bundle files from, and finds it by locating qmake. There's no
-          # system Qt in this minimal container, and installing one via
-          # apt would be the WRONG fix even if it worked: PySide6 wheels
-          # bundle their own private Qt build rather than relying on a
-          # system install, so pointing this at an unrelated system Qt
-          # risks bundling a different Qt version than the one PySide6
-          # actually runs against at runtime. Ask PySide6 itself where its
-          # own qmake lives instead, so the bundled Qt always matches.
-          QT_BIN_DIR=$(/opt/venv/bin/python3 -c "import os, PySide6; print(os.path.join(os.path.dirname(PySide6.__file__), 'Qt', 'bin'))")
-          export QMAKE="$QT_BIN_DIR/qmake"
-          if [ ! -f "$QMAKE" ]; then
-            echo "Expected qmake at $QMAKE but it's not there. Contents of $QT_BIN_DIR:"
-            ls -la "$QT_BIN_DIR" || echo "(that directory doesn't exist either)"
-            exit 1
-          fi
-
+          # Deliberately NOT using --plugin qt here. PyInstaller's own
+          # PySide6 hooks already correctly bundled everything Qt-related
+          # -- both the shared libraries AND the platform plugins (e.g.
+          # the "xcb" plugin needed to actually open a window on Linux) --
+          # directly into dist/Reliquarium/, which was copied wholesale
+          # into AppDir/usr/bin/ in the previous step. linuxdeploy's Qt
+          # plugin is built for a RAW, traditionally-built C++ Qt binary
+          # that hasn't had any of that done yet -- it goes looking for a
+          # conventional Qt SDK layout (qmake, usr/lib/) that doesn't
+          # apply here, which is what actually caused the last two
+          # failures. Running it on top of an already-PyInstaller-bundled
+          # app is redundant at best. Plain linuxdeploy still does useful
+          # work without it: resolving non-Qt shared library dependencies,
+          # generating AppRun, and packaging everything into the AppImage.
           ./linuxdeploy-squashfs-root/AppRun --appdir AppDir \
             --executable AppDir/usr/bin/Reliquarium \
             --desktop-file packaging/linux/reliquarium.desktop \
             --icon-file assets/icon.png \
-            --plugin qt --output appimage
+            --output appimage
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
