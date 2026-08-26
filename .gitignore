@@ -1,0 +1,27 @@
+# Reliquarium's own portable data (hash cache, collections, verification
+# history, settings) -- this is personal to whoever runs the app, never
+# something that belongs in the repo. See "Portable Storage" in the README.
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# Linux AppImage build artifacts (produced by CI, not meant to be committed)
+*.AppImage
+AppDir/
+squashfs-root/
+linuxdeploy*.AppImage
+linuxdeploy-*-squashfs-root/
+
+# OS cruft
+.DS_Store
+Thumbs.db

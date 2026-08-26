@@ -1,0 +1,141 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  build-appimage:
+    name: Linux AppImage
+    runs-on: ubuntu-latest
+    # Runs the actual build inside an Ubuntu 24.04 container rather than on
+    # the runner's own OS, so the glibc/library versions the AppImage links
+    # against are pinned deliberately rather than whatever happens to be on
+    # the runner. 24.04 (not something older) is a deliberate choice here,
+    # not a compatibility compromise: this tool's actual audience skews
+    # toward people already needing something newer PicCheck/Hunter don't
+    # play nice with (e.g. Windows 11), so a Linux baseline from a couple
+    # years back is a reasonable bet on who's actually running this. A
+    # binary built against a newer glibc than a user's system has will
+    # refuse to run there at all, so this is still a deliberate ceiling,
+    # just a higher one than the oldest-possible-compatibility approach.
+    container:
+      image: ubuntu:24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3 python3-pip python3-venv \
+            wget file fuse libfuse2 git \
+            libgl1 libegl1 libxkbcommon0 libxcb-cursor0
+
+      - name: Install Python dependencies
+        run: |
+          # Ubuntu 24.04 enforces PEP 668 ("externally managed environment")
+          # by default, which blocks a bare system-level pip install. A
+          # venv sidesteps that cleanly and is the more correct approach
+          # for CI regardless of which Ubuntu version this ends up on.
+          python3 -m venv /opt/venv
+          /opt/venv/bin/pip install --upgrade pip
+          /opt/venv/bin/pip install -r requirements.txt
+          /opt/venv/bin/pip install pyinstaller
+
+      - name: Build with PyInstaller (onedir)
+        run: |
+          /opt/venv/bin/pyinstaller --noconsole --onedir --name Reliquarium \
+            --icon assets/icon.ico --add-data "assets/icon.ico:assets" \
+            main.py
+
+      - name: Fetch linuxdeploy and the Qt plugin
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+          # These tools are themselves distributed as AppImages, which
+          # normally need FUSE to mount and run -- often unavailable
+          # inside a container without extra privileges. Extracting once
+          # and running the extracted binary directly sidesteps that
+          # entirely rather than fighting FUSE in CI.
+          ./linuxdeploy-x86_64.AppImage --appimage-extract
+          mv squashfs-root linuxdeploy-squashfs-root
+          ./linuxdeploy-plugin-qt-x86_64.AppImage --appimage-extract
+          mv squashfs-root linuxdeploy-plugin-qt-squashfs-root
+
+      - name: Assemble AppDir
+        run: |
+          mkdir -p AppDir/usr/bin
+          cp -r dist/Reliquarium/* AppDir/usr/bin/
+          cp packaging/linux/reliquarium.desktop AppDir/
+          cp assets/icon.png AppDir/reliquarium.png
+
+      - name: Build the AppImage
+        run: |
+          export PATH="$PWD/linuxdeploy-plugin-qt-squashfs-root/usr/bin:$PATH"
+          export QML_SOURCES_PATHS="$PWD"
+          ./linuxdeploy-squashfs-root/AppRun --appdir AppDir \
+            --executable AppDir/usr/bin/Reliquarium \
+            --desktop-file packaging/linux/reliquarium.desktop \
+            --icon-file assets/icon.png \
+            --plugin qt --output appimage
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Reliquarium-x86_64.AppImage
+          path: "*.AppImage"
+
+  build-windows:
+    name: Windows (onedir)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller (onedir)
+        run: |
+          pyinstaller --noconsole --onedir --name Reliquarium `
+            --icon assets\icon.ico --add-data "assets\icon.ico;assets" `
+            main.py
+
+      - name: Zip the build
+        run: |
+          Compress-Archive -Path dist\Reliquarium\* -DestinationPath Reliquarium-Windows-x64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Reliquarium-Windows-x64
+          path: Reliquarium-Windows-x64.zip
+
+  release:
+    name: Create release
+    needs: [build-appimage, build-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.AppImage
+            artifacts/**/*.zip
+          generate_release_notes: true

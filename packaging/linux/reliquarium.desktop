@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Reliquarium
+GenericName=Media Collection Organizer
+Comment=Match files to CSV catalogs by CRC32 and sort them into place
+Exec=reliquarium
+Icon=reliquarium
+Categories=Utility;FileTools;
+Terminal=false
