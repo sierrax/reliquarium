@@ -49,8 +49,23 @@ jobs:
 
       - name: Build with PyInstaller (onedir)
         run: |
+          # --collect-all PySide6: PyInstaller's automatic hook-based
+          # detection is supposed to bundle Qt's platform plugins (e.g.
+          # libqxcb.so, needed to open a window at all on Linux)
+          # automatically, but confirmed via direct inspection of an
+          # actual built AppImage (extracted and searched by hand) that it
+          # wasn't happening here -- nothing matching *qxcb*/*qwayland*
+          # existed anywhere in the bundle. This forces collection of
+          # everything in the PySide6 package explicitly rather than
+          # relying on PyInstaller's static-analysis detection, which is
+          # the standard, well-established fix for this exact class of
+          # "PyInstaller silently missed some PySide6 plugins" gap. Not
+          # applied to the Windows build below, which has been working
+          # correctly without it since the very first CI run -- no reason
+          # to risk changing something that already works there.
           /opt/venv/bin/pyinstaller --noconsole --onedir --name Reliquarium \
             --icon assets/icon.ico --add-data "assets/icon.ico:assets" \
+            --collect-all PySide6 \
             main.py
 
       - name: Fetch linuxdeploy
