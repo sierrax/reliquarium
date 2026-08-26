@@ -66,15 +66,28 @@ class SetupDialog(QDialog):
 
         root.addWidget(dirs_group)
 
-        # Behavior and reporting preferences: always constructed (so
-        # values() can always read them uniformly) but only added to the
-        # visible layout -- and therefore only ever shown or editable --
-        # when this isn't the first-run wizard.
+        # Behavior and reporting preferences: ALWAYS constructed AND
+        # ALWAYS added to the layout, so their widgets always have a
+        # stable Qt parent (this dialog) -- just hidden, not omitted,
+        # during first-run. A widget that's constructed but never added
+        # to any layout has no Qt-level parent and no surviving Python
+        # reference once this method returns, which gives it undefined
+        # lifetime: PySide6/shiboken may destroy the underlying C++
+        # object at any point after that, including before values() gets
+        # a chance to read it after the dialog closes. That's exactly
+        # what conditionally SKIPPING addWidget() here used to do, and
+        # it's not something that was ever actually safe -- it just
+        # happened not to get garbage-collected in time on Windows.
+        # setVisible(False) keeps them properly parented (and correctly
+        # takes no layout space) while still being invisible/inert during
+        # first-run, without the lifetime risk.
         behavior_group = self._build_behavior_group(initial)
         reporting_group = self._build_reporting_group(initial)
-        if not first_run:
-            root.addWidget(behavior_group)
-            root.addWidget(reporting_group)
+        root.addWidget(behavior_group)
+        root.addWidget(reporting_group)
+        if first_run:
+            behavior_group.setVisible(False)
+            reporting_group.setVisible(False)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Cancel).setText("Skip" if first_run else "Cancel")
