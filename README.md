@@ -89,14 +89,15 @@ Some Show S01E01.mkv,419430400,DEADBEEF,\TV\Some Show\Season 1
    pip install -r requirements.txt
    ```
 
-   On Python 3.12+, this won't install a working dark theme package — the
-   original `pyqtdarktheme` project was abandoned in 2022 and caps out at
-   Python <3.12, so pip has nothing modern to offer there. The app still
-   runs fine without it (falls back to the default Qt style, which often
-   already looks reasonably dark if your OS is set to dark mode). For real
-   theming with **View → Theme** on current Python, install a maintained
-   fork instead: `pip install PyQtDarkTheme-fork` (same import name, drop-in
-   compatible).
+   On Python 3.12+, `requirements.txt` installs `PyQtDarkTheme-fork`
+   instead of the original `pyqtdarktheme` package — the original project
+   was abandoned in 2022 and caps out at Python <3.12, so pip has nothing
+   modern to offer there under that name. The fork uses the same
+   `qdarktheme` import name and the same API, so this is handled
+   automatically; nothing extra to install by hand. If theming somehow
+   ends up unavailable anyway, the app still runs fine without it (falls
+   back to the default Qt style, which often already looks reasonably
+   dark if your OS is set to dark mode).
 
 3. Run it:
 

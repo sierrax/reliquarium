@@ -3,11 +3,11 @@ PySide6>=6.6
 # Theming is optional -- the app degrades gracefully without it, and
 # detects/uses whichever API generation is actually installed (see
 # ui/main_window.py's _set_theme). The original "pyqtdarktheme" package was
-# abandoned in Dec 2022 at v2.1.0 and requires Python <3.12, so on Python
-# 3.12+ pip will silently install its ancient last-compatible release
-# (0.1.x) instead -- which lacks the modern setup_theme() API entirely. For
-# real modern theming on current Python, install a maintained fork instead,
-# e.g.:
-#   pip install PyQtDarkTheme-fork
-# (same "qdarktheme" import name, same API -- drop-in compatible either way)
+# abandoned in Dec 2022 at v2.1.0 and requires Python <3.12. On Python
+# 3.12+ (which includes the Ubuntu 24.04 container the AppImage builds
+# against), the maintained community fork is used instead -- same
+# "qdarktheme" import name, same API, drop-in compatible either way. Only
+# one of these two lines is ever active for a given Python version, so
+# there's no conflict between them.
 pyqtdarktheme>=2.1.0 ; python_version < "3.12"
+PyQtDarkTheme-fork ; python_version >= "3.12"
