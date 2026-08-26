@@ -32,7 +32,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            python3 python3-pip python3-venv \
+            python3 python3-pip python3-venv python3-dev libpython3.12 \
             wget file fuse libfuse2 git binutils \
             libgl1 libegl1 libxkbcommon0 libxcb-cursor0
 
