@@ -61,12 +61,35 @@ jobs:
           # These tools are themselves distributed as AppImages, which
           # normally need FUSE to mount and run -- often unavailable
           # inside a container without extra privileges. Extracting once
-          # and running the extracted binary directly sidesteps that
+          # and running the extracted AppRun directly sidesteps that
           # entirely rather than fighting FUSE in CI.
           ./linuxdeploy-x86_64.AppImage --appimage-extract
           mv squashfs-root linuxdeploy-squashfs-root
           ./linuxdeploy-plugin-qt-x86_64.AppImage --appimage-extract
           mv squashfs-root linuxdeploy-plugin-qt-squashfs-root
+
+          # linuxdeploy discovers its Qt plugin by searching for an
+          # executable named "linuxdeploy-plugin-qt" (suffixes allowed) in
+          # its own directory and on PATH. If the ORIGINAL AppImage is
+          # still sitting here, it matches that pattern and gets found and
+          # preferred over the extracted version -- landing right back in
+          # the same FUSE problem one level down, since running it directly
+          # tries to self-mount it. Deleting the originals now that they're
+          # extracted prevents that.
+          rm -f linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+
+          # A correctly-named wrapper that goes through the extracted
+          # AppRun, not the raw inner binary directly -- AppRun is what
+          # sets up LD_LIBRARY_PATH etc. for the plugin's own bundled
+          # libraries, so calling the inner binary straight from usr/bin
+          # would risk a *different* library-loading failure once the
+          # plugin actually got invoked.
+          mkdir -p plugin-bin
+          cat > plugin-bin/linuxdeploy-plugin-qt << EOF
+          #!/bin/sh
+          exec "$PWD/linuxdeploy-plugin-qt-squashfs-root/AppRun" "\$@"
+          EOF
+          chmod +x plugin-bin/linuxdeploy-plugin-qt
 
       - name: Assemble AppDir
         run: |
@@ -77,7 +100,7 @@ jobs:
 
       - name: Build the AppImage
         run: |
-          export PATH="$PWD/linuxdeploy-plugin-qt-squashfs-root/usr/bin:$PATH"
+          export PATH="$PWD/plugin-bin:$PATH"
           export QML_SOURCES_PATHS="$PWD"
           ./linuxdeploy-squashfs-root/AppRun --appdir AppDir \
             --executable AppDir/usr/bin/Reliquarium \
