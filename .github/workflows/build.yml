@@ -89,6 +89,34 @@ jobs:
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
           cp assets/icon.png AppDir/usr/share/icons/hicolor/256x256/apps/reliquarium.png
 
+          # linuxdeploy's own generic AppRun assumes the traditional
+          # usr/bin + usr/lib split and sets Qt's plugin-path environment
+          # variables accordingly -- but everything here (executable AND
+          # the Qt plugins PyInstaller already bundled) sits flat in
+          # usr/bin/, PyInstaller's own layout, not usr/lib/. That mismatch
+          # points Qt at an empty plugin path at runtime ("Could not find
+          # the Qt platform plugin ... in \"\""). This custom AppRun finds
+          # the real platforms plugin directory dynamically at runtime
+          # (via $APPDIR, wherever the AppImage actually ends up
+          # extracted/mounted) instead of assuming a fixed layout, so it
+          # works regardless of exactly where PyInstaller's PySide6 hooks
+          # placed things. Tested this exact discovery logic directly
+          # (found-case and not-found-case) before relying on it here.
+          cat > custom-apprun.sh << 'APPRUN_EOF'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          export LD_LIBRARY_PATH="$HERE/usr/bin:${LD_LIBRARY_PATH}"
+
+          PLATFORMS_DIR="$(dirname "$(find "$HERE/usr/bin" -name "libqxcb.so" 2>/dev/null | head -n1)")"
+          if [ -n "$PLATFORMS_DIR" ] && [ "$PLATFORMS_DIR" != "." ]; then
+              export QT_QPA_PLATFORM_PLUGIN_PATH="$PLATFORMS_DIR"
+              export QT_PLUGIN_PATH="$(dirname "$PLATFORMS_DIR")"
+          fi
+
+          exec "$HERE/usr/bin/Reliquarium" "$@"
+          APPRUN_EOF
+          chmod +x custom-apprun.sh
+
       - name: Build the AppImage
         run: |
           export QML_SOURCES_PATHS="$PWD"
@@ -106,11 +134,14 @@ jobs:
           # failures. Running it on top of an already-PyInstaller-bundled
           # app is redundant at best. Plain linuxdeploy still does useful
           # work without it: resolving non-Qt shared library dependencies,
-          # generating AppRun, and packaging everything into the AppImage.
+          # and packaging everything into the AppImage -- --custom-apprun
+          # (see the previous step) replaces its generated AppRun with one
+          # that correctly points Qt at its actual bundled plugin location.
           ./linuxdeploy-squashfs-root/AppRun --appdir AppDir \
             --executable AppDir/usr/bin/Reliquarium \
             --desktop-file packaging/linux/reliquarium.desktop \
             --icon-file assets/icon.png \
+            --custom-apprun custom-apprun.sh \
             --output appimage
 
       - name: Upload artifact
