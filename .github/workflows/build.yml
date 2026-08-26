@@ -70,8 +70,24 @@ jobs:
         run: |
           mkdir -p AppDir/usr/bin
           cp -r dist/Reliquarium/* AppDir/usr/bin/
-          cp packaging/linux/reliquarium.desktop AppDir/
-          cp assets/icon.png AppDir/reliquarium.png
+          # NOT copying the .desktop file or icon to the AppDir root here
+          # -- linuxdeploy's own --desktop-file and --icon-file flags (used
+          # in the next step) are documented to handle placing both
+          # correctly themselves (desktop file into
+          # usr/share/applications/, icon into the proper XDG icon theme
+          # structure, plus root-level symlinks for both). A redundant
+          # manual copy at the AppDir root, sitting outside that expected
+          # structure, risks confusing linuxdeploy's own placement/
+          # discovery logic -- which is the likely cause of the "Could not
+          # find suitable icon" error despite --icon-file being provided.
+          #
+          # The icon is ALSO placed at the correct, spec-compliant XDG
+          # icon theme path explicitly, as a belt-and-suspenders fallback
+          # in case --icon-file's own auto-placement has some other,
+          # unrelated quirk -- see the freedesktop icon theme spec:
+          # https://specifications.freedesktop.org/icon-theme-spec/icon-theme-spec-latest.html
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          cp assets/icon.png AppDir/usr/share/icons/hicolor/256x256/apps/reliquarium.png
 
       - name: Build the AppImage
         run: |
