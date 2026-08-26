@@ -16,17 +16,32 @@ from pathlib import Path
 def app_dir() -> Path:
     """The directory the app itself lives in.
 
-    When frozen by PyInstaller, this is the folder containing the actual
-    .exe on disk (sys.executable) -- deliberately NOT PyInstaller's
-    --onefile extraction temp dir (sys._MEIPASS), which is recreated fresh
-    and deleted again on every single launch. Writing persistent data there
-    would silently lose everything between runs, defeating the entire
-    point of portable storage. sys.executable points to the real, stable
-    .exe location in both --onefile and --onedir builds.
+    Checked in order:
 
-    Running from source, this is just the project root (the folder
-    containing main.py).
+    1. $APPIMAGE, if set -- this is how a running AppImage is meant to
+       find its own real, persistent location. AppImages mount themselves
+       into a temporary location via FUSE on every launch (typically
+       under /tmp/.mount_XXXXXXX/...), and sys.executable from inside a
+       running AppImage points INTO that ephemeral mount, not to the
+       actual .AppImage file sitting on real disk. That mount is torn
+       down the moment the app exits, taking anything written there with
+       it -- so using sys.executable here would silently lose all
+       portable data on every single run. This is a different problem
+       from PyInstaller's own --onefile extraction temp dir (handled
+       below): AppImage does its own separate temporary mounting, one
+       layer above whatever PyInstaller build mode sits underneath it.
+    2. sys.executable, when frozen by PyInstaller but NOT running as an
+       AppImage (a plain Windows .exe, or a Linux onedir/onefile build
+       not wrapped in an AppImage) -- this is the folder containing the
+       actual .exe/executable on disk, deliberately not
+       PyInstaller's --onefile extraction temp dir (sys._MEIPASS), which
+       has the same "recreated and deleted every launch" problem.
+    3. The project root (the folder containing main.py), when running
+       from source.
     """
+    appimage_path = os.environ.get("APPIMAGE")
+    if appimage_path:
+        return Path(appimage_path).resolve().parent
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent

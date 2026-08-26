@@ -682,6 +682,17 @@ The migration only ever copies (never deletes the original) and only runs
 if the new `data\` folder doesn't already have its own data in it, so it's
 safe even if something about your setup is unusual.
 
+**On the Linux AppImage specifically**, `data/` lands next to the actual
+`.AppImage` file itself, not somewhere that vanishes when the app closes.
+This needed its own fix: an AppImage mounts itself into a temporary
+location via FUSE on every launch, and naively resolving "where does the
+app live" from inside a running AppImage would land inside that ephemeral
+mount — which is torn down the moment the app exits, silently destroying
+`data/` on every single run. Reliquarium checks for AppImage's own
+`$APPIMAGE` environment variable first specifically to avoid this — it
+points at the real, persistent file on disk regardless of where the
+temporary mount happens to be.
+
 ## Notes
 
 - This code was written and syntax-checked in a sandbox without network
