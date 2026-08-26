@@ -1,0 +1,13 @@
+PySide6>=6.6
+
+# Theming is optional -- the app degrades gracefully without it, and
+# detects/uses whichever API generation is actually installed (see
+# ui/main_window.py's _set_theme). The original "pyqtdarktheme" package was
+# abandoned in Dec 2022 at v2.1.0 and requires Python <3.12, so on Python
+# 3.12+ pip will silently install its ancient last-compatible release
+# (0.1.x) instead -- which lacks the modern setup_theme() API entirely. For
+# real modern theming on current Python, install a maintained fork instead,
+# e.g.:
+#   pip install PyQtDarkTheme-fork
+# (same "qdarktheme" import name, same API -- drop-in compatible either way)
+pyqtdarktheme>=2.1.0 ; python_version < "3.12"
