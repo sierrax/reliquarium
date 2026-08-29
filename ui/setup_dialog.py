@@ -156,6 +156,16 @@ class SetupDialog(QDialog):
         self.auto_open_report_check.setChecked(bool(initial.get("auto_open_report", False)))
         layout.addWidget(self.auto_open_report_check)
 
+        self.notify_long_operations_check = QCheckBox("Show a desktop notification after long scans or moves")
+        self.notify_long_operations_check.setToolTip(
+            "Fires a system notification when a Scan or a Process Selected (move + verification) "
+            "finishes, but only if that operation actually ran long enough to plausibly step away "
+            "from -- a quick scan of a handful of files won't trigger one, so the ones you do get "
+            "stay meaningful instead of becoming background noise."
+        )
+        self.notify_long_operations_check.setChecked(bool(initial.get("notify_long_operations", False)))
+        layout.addWidget(self.notify_long_operations_check)
+
         retention_row = QHBoxLayout()
         retention_row.addWidget(QLabel("Keep last"))
         self.report_retention_spin = QSpinBox()
@@ -200,5 +210,6 @@ class SetupDialog(QDialog):
             "default_recursive": self.default_recursive_check.isChecked(),
             "verify_collection_dir": self.verify_collection_dir_check.isChecked(),
             "auto_open_report": self.auto_open_report_check.isChecked(),
+            "notify_long_operations": self.notify_long_operations_check.isChecked(),
             "report_retention_count": self.report_retention_spin.value(),
         }

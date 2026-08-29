@@ -206,7 +206,8 @@ that):
     "set once and never touch again" choice, freeing up main-window space
     for the controls that actually vary run to run.
 - **Reporting** — "Also verify Base Collections Directory for reports",
-  "Automatically open report after processing", and "Keep last N
+  "Automatically open report after processing", "Show a desktop
+  notification after long scans or moves", and "Keep last N
   auto-generated reports per collection" — see **Reporting** below for
   what each one does. These also used to be main-window checkboxes; same
   reasoning as recursive scan.
@@ -317,6 +318,29 @@ Every time this window verifies (on open and on each **Refresh**), it also
 silently saves a timestamped report to `<default CSV directory>\reports\`
 — see **Reporting** below for why reports are always tied to an actual
 verification like this one, rather than generated from a plain scan.
+
+### All Collections Status window
+
+**Collections → All Collections Status...** shows every saved collection's
+completion at a glance — one row per collection (name, CSV count, how many
+are Archived, overall % complete), rather than opening a separate
+Collection Status window for each one and checking them individually.
+
+Unlike the single-collection window above, opening this one is **instant**
+regardless of how many collections you have — it reads purely from the
+persisted verification cache, no disk walking, no hashing. A collection
+that's never been through a full check at all shows as `0.0% (unverified)`
+in gray rather than a plain red 0% — those are genuinely different
+situations (nothing's known yet, vs. checked and confirmed empty) that
+would otherwise look identical and read as far more alarming than
+warranted.
+
+**Refresh all** is the manual escape hatch when you actually want current
+numbers: it walks every saved collection for real (skipping Archived CSVs,
+same as everywhere else) and writes the results into the same shared
+verification cache the main window and individual Collection Status
+windows read from and write to — so a refresh here is immediately visible
+everywhere else too, and vice versa.
 
 ## Output Path Structure
 
@@ -444,6 +468,13 @@ what's in the current ingest batch.
   collection, each one's report opens separately. This is specifically
   about the post-move report — opening/refreshing the Collection Status
   window doesn't trigger it, since that's a different, on-demand action.
+- **"Show a desktop notification after long scans or moves"** (off by
+  default) — fires a system notification when a **Scan** or **Process
+  Selected** (move + its automatic verification) finishes, but only if
+  that particular run actually took long enough to plausibly step away
+  from (currently 15 seconds) — a quick scan of a handful of files won't
+  trigger one, so the notifications you do get stay meaningful instead of
+  becoming background noise you learn to tune out.
 
 **This is a "trust it, refresh occasionally" cache, same as the hash
 cache** — it does not detect changes made outside the app. If you
@@ -589,11 +620,14 @@ core/report.py                 correct/bad/missing classification + report & nee
 core/resources.py               locates bundled read-only files (icon) whether run from source or a frozen .exe
 core/portable.py                 locates the app's own persistent data/ directory + migrates legacy %LOCALAPPDATA% data
 core/version.py                 single source of truth for the version number
+core/os_open.py                  opens a file with the OS default handler (cross-platform)
+core/notify.py                   desktop notifications for long-running scans/moves (QSystemTrayIcon)
 assets/icon.ico, icon.png       app icon
 core/file_ops.py               move/copy with conflict resolution + empty-directory cleanup after Move
 ui/main_window.py              main window / application logic
 ui/collections_dialog.py       Manage Collections dialog
 ui/collection_status_window.py per-collection completeness dashboard (separate window)
+ui/all_collections_status_window.py  every collection's completion at a glance (instant, cache-only; Refresh all for a real check)
 ui/setup_dialog.py             first-run wizard / Preferences dialog (directories + behavior + reporting)
 ui/results_model.py            Qt table model + status/search filter proxy
 ui/processing_thread.py        background thread for move/copy jobs

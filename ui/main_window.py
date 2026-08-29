@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import os
+import time
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
 
@@ -25,6 +26,7 @@ from core.collections_store import CollectionsStore, default_collections_path
 from core.path_sanitize import sanitize_windows_name
 from core.report import classify_entries, per_csv_summary, split_by_collection, format_report_text, format_needed_csv, prune_old_reports, OVERALL_KEY
 from core.os_open import open_with_default_app
+from core.notify import Notifier
 from core.portable import app_data_dir, migrate_legacy_data
 from core.resources import resource_path
 from core.version import __version__
@@ -33,6 +35,7 @@ from ui.processing_thread import ProcessingThread
 from ui.collections_dialog import CollectionsDialog
 from ui.setup_dialog import SetupDialog
 from ui.collection_status_window import CollectionStatusWindow
+from ui.all_collections_status_window import AllCollectionsStatusWindow
 
 try:
     import qdarktheme
@@ -72,6 +75,7 @@ class MainWindow(QMainWindow):
         icon_path = resource_path("assets/icon.ico")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
+        self._notifier = Notifier(icon_path=icon_path, parent=self)
 
         self._catalog_index: dict = {}
         self._catalog_entries: list = []   # full entry list from the last scan's CSV(s), for reporting
@@ -100,12 +104,14 @@ class MainWindow(QMainWindow):
                                                      # naturally supports many collections being tracked at
                                                      # once without any format change.
         self._scan_generation = 0
+        self._scan_start_time: float = 0.0
         self._collection_scan_generation = 0
         self._pending_verify_callback = None
         self._pending_verify_queue: list = []   # [(source_collection, csv_name, folder_path), ...] still to walk
         self._current_verify_key = ("", "")     # (source_collection, csv_name) the in-flight walk's results belong to
         self._process_success_count = 0
         self._process_touched_keys: set = set()  # (source_collection, source_csv) pairs actually moved/copied this run
+        self._process_start_time: float = 0.0
         self._process_moved_source_dirs: set = set()  # parent dirs of files actually MOVED this run, for empty-dir cleanup
         self._hash_total = 0
         self._hash_completed = 0
@@ -188,6 +194,9 @@ class MainWindow(QMainWindow):
         collections_menu = menu_bar.addMenu("&Collections")
         manage_collections_menu_action = collections_menu.addAction("Manage Collections...")
         manage_collections_menu_action.triggered.connect(self._open_manage_collections)
+        collections_menu.addSeparator()
+        all_status_menu_action = collections_menu.addAction("All Collections Status...")
+        all_status_menu_action.triggered.connect(self._open_all_collections_status)
 
         if qdarktheme is not None:
             view_menu = menu_bar.addMenu("&View")
@@ -618,6 +627,19 @@ class MainWindow(QMainWindow):
         window.raise_()
         window.activateWindow()
 
+    def _open_all_collections_status(self):
+        output_base_dir = self.output_dir_edit.text().strip()
+        window = AllCollectionsStatusWindow(
+            self.collections_store, output_base_dir, self._hash_cache, self._cache_path,
+            verification_cache=self._verification_cache,
+            verification_cache_path=self._verification_cache_path,
+            parent=self,
+        )
+        self._status_windows.append(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
     def _browse_output_dir(self):
         path = QFileDialog.getExistingDirectory(self, "Select Base Collections Directory", self.output_dir_edit.text())
         if path:
@@ -644,6 +666,7 @@ class MainWindow(QMainWindow):
             "default_recursive": self.settings.value("default_recursive", True, type=bool),
             "verify_collection_dir": self.settings.value("verify_collection_dir", True, type=bool),
             "auto_open_report": self.settings.value("auto_open_report", False, type=bool),
+            "notify_long_operations": self.settings.value("notify_long_operations", False, type=bool),
             "report_retention_count": self.settings.value("report_retention_count", 10, type=int),
         }
 
@@ -669,6 +692,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("default_recursive", values.get("default_recursive", True))
         self.settings.setValue("verify_collection_dir", values.get("verify_collection_dir", True))
         self.settings.setValue("auto_open_report", values.get("auto_open_report", False))
+        self.settings.setValue("notify_long_operations", values.get("notify_long_operations", False))
         self.settings.setValue("report_retention_count", values.get("report_retention_count", 10))
 
     def _load_persisted_defaults(self):
@@ -751,6 +775,7 @@ class MainWindow(QMainWindow):
         self._hash_completed = 0
         self._cache_hits = 0
         self._scanned_files = []
+        self._scan_start_time = time.monotonic()
         # NOTE: self._collection_scanned_files_by_key is intentionally NOT
         # reset here -- it should persist across scans of the same
         # collection(s) and only be cleared/refreshed by
@@ -1010,6 +1035,12 @@ class MainWindow(QMainWindow):
         if self._catalog_entries:
             self.generate_report_button.setEnabled(True)
             self.generate_needed_button.setEnabled(True)
+        self._maybe_notify(
+            "Scan complete",
+            f"{counts.get('Matched', 0)} matched, {counts.get('Unmatched', 0)} unmatched, "
+            f"{counts.get('Error', 0)} errors",
+            self._scan_start_time,
+        )
         # NOTE: deliberately no report generation here. A plain scan never
         # verifies the collection directory (see _verify_collection_directory's
         # docstring), so a report at this point would only reflect whatever was
@@ -1066,6 +1097,7 @@ class MainWindow(QMainWindow):
         self._process_success_count = 0
         self._process_touched_keys = set()
         self._process_moved_source_dirs = set()
+        self._process_start_time = time.monotonic()
 
         self._processing_thread = ProcessingThread(jobs, operation, conflict_policy, self)
         self._processing_thread.progress.connect(
@@ -1126,6 +1158,23 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _log(self, message: str):
         self.log_edit.appendPlainText(message)
+
+    NOTIFY_MIN_SECONDS = 15  # only notify for operations that actually ran long enough to
+                              # plausibly step away from -- firing on every quick scan would
+                              # just train the eye to ignore them by the time one actually matters
+
+    def _maybe_notify(self, title: str, message: str, start_time: float):
+        """Fires a desktop notification only if (a) the user has opted in
+        via Preferences and (b) the operation actually took long enough to
+        justify one (see NOTIFY_MIN_SECONDS). Both scans (hashing-bound)
+        and Process Selected (move + verification-bound) call this from
+        their own completion points with their own start_time, captured
+        via time.monotonic() when that operation began."""
+        if not self.settings.value("notify_long_operations", False, type=bool):
+            return
+        if time.monotonic() - start_time < self.NOTIFY_MIN_SECONDS:
+            return
+        self._notifier.notify(title, message)
 
     def _export_log(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export Results", "results.csv", "CSV Files (*.csv)")
@@ -1519,6 +1568,13 @@ class MainWindow(QMainWindow):
         the OS default handler for .txt files."""
         if not self._catalog_entries:
             return
+
+        self._maybe_notify(
+            "Move complete",
+            f"{self._process_success_count} file(s) moved and verified",
+            self._process_start_time,
+        )
+
         reports_dir = self._reports_dir()
         if not reports_dir:
             self._log("Skipping automatic report (no default CSV directory set -- see File > Preferences).")
